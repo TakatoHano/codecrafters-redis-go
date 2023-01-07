@@ -2,9 +2,12 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
+	"io"
 	"net"
 	"os"
+	"strconv"
 )
 
 func main() {
@@ -16,18 +19,57 @@ func main() {
 		fmt.Println("Failed to bind to port 6379")
 		os.Exit(1)
 	}
-	conn, err := l.Accept()
 	if err != nil {
-		fmt.Println("Error accepting connection: ", err.Error())
+		fmt.Println("Error Listening TCP: ", err.Error())
 		os.Exit(1)
 	}
+
+	f := func(c net.Conn) {
+		defer c.Close()
+		for {
+			msg := read(c)
+			if msg == "" {
+				return
+			}
+			fmt.Println("recieve msg:", msg)
+			// TODO: parse request message
+			c.Write([]byte("+PONG\r\n"))
+
+		}
+	}
 	for {
-		_, err := bufio.NewReader(conn).ReadString('\r')
+		conn, err := l.Accept()
+		if err != nil {
+			fmt.Println("Error accepting connection: ", err.Error())
+			os.Exit(1)
+		}
+		go f(conn)
+	}
+}
+
+func read(conn net.Conn) string {
+	var msg bytes.Buffer
+	reader := bufio.NewReader(conn)
+
+	b, err := reader.ReadBytes('\n')
+	if err == io.EOF {
+		return msg.String()
+	}
+	if err != nil {
+		fmt.Println("Error reading string: ", err.Error())
+		os.Exit(1)
+	}
+
+	op, _ := strconv.Atoi(string(b[1]))
+	msg.Write(b)
+	for num := 0; num < op*2; num++ {
+		c, err := reader.ReadBytes('\n')
 		if err != nil {
 			fmt.Println("Error reading string: ", err.Error())
 			os.Exit(1)
 		}
-		// TODO: parse request message
-		conn.Write([]byte("+PONG\r\n"))
+		msg.Write(c)
 	}
+
+	return msg.String()
 }
