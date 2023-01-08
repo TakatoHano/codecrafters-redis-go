@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"strconv"
+	"strings"
 )
 
 func main() {
@@ -27,13 +28,13 @@ func main() {
 	f := func(c net.Conn) {
 		defer c.Close()
 		for {
-			msg := read(c)
-			if msg == "" {
+			msg, error := read(c)
+			if error == io.EOF || msg == "" {
 				return
 			}
 			fmt.Println("recieve msg:", msg)
 			// TODO: parse request message
-			c.Write([]byte("+PONG\r\n"))
+			write(msg, c)
 
 		}
 	}
@@ -47,13 +48,13 @@ func main() {
 	}
 }
 
-func read(conn net.Conn) string {
+func read(conn net.Conn) (string, error) {
 	var msg bytes.Buffer
 	reader := bufio.NewReader(conn)
 
 	b, err := reader.ReadBytes('\n')
 	if err == io.EOF {
-		return msg.String()
+		return msg.String(), io.EOF
 	}
 	if err != nil {
 		fmt.Println("Error reading string: ", err.Error())
@@ -71,5 +72,64 @@ func read(conn net.Conn) string {
 		msg.Write(c)
 	}
 
-	return msg.String()
+	return msg.String(), nil
+}
+
+func write(msg string, conn net.Conn) {
+
+	var num, len int
+	var response string
+	scanner := bufio.NewScanner(strings.NewReader(msg))
+	for scanner.Scan() {
+		l := scanner.Text()
+		l = strings.TrimRight(l, "\n")
+		l = strings.TrimRight(l, "\r")
+		fmt.Println("Line:", l)
+		switch parse(l) {
+		case 0:
+			num, _ = strconv.Atoi(l[1:])
+			fmt.Println("Num:", num)
+		case 1:
+			len, _ = strconv.Atoi(l[1:])
+			fmt.Println("Len:", len)
+		case 2:
+			num--
+			txt, typ := run(l[0:len])
+			fmt.Println("Type:", typ)
+			switch typ {
+			case 0:
+				response = "+" + txt + "\r\n"
+			case 1:
+				if num == 0 {
+					response = "+PONG\r\n"
+				}
+			case 2:
+			default:
+			}
+		}
+	}
+	conn.Write([]byte(response))
+}
+
+func parse(line string) int {
+
+	switch line[0] {
+	case '*':
+		return 0
+	case '$':
+		return 1
+	default:
+		return 2
+	}
+}
+
+func run(msg string) (string, int) {
+	switch msg {
+	case "ping", "PING":
+		return "", 1
+	case "echo", "ECHO":
+		return msg, 2
+	default:
+		return msg, 0
+	}
 }
