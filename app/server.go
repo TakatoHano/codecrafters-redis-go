@@ -9,11 +9,17 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 )
+
+type kvs map[string]string
 
 func main() {
 	// You can use print statements as follows for debugging, they'll be visible when running tests.
 	fmt.Println("Logs from your program will appear here!")
+	var mu sync.Mutex
+
+	m := kvs{}
 
 	l, err := net.Listen("tcp", "0.0.0.0:6379")
 	if err != nil {
@@ -34,7 +40,9 @@ func main() {
 			}
 			fmt.Println("recieve msg:", msg)
 			// TODO: parse request message
-			write(msg, c)
+			mu.Lock()
+			write(msg, c, m)
+			mu.Unlock()
 
 		}
 	}
@@ -75,11 +83,12 @@ func read(conn net.Conn) (string, error) {
 	return msg.String(), nil
 }
 
-func write(msg string, conn net.Conn) {
+func write(msg string, conn net.Conn, m kvs) {
 
 	var num, len int
-	var response string
+	var response, op, key string
 	scanner := bufio.NewScanner(strings.NewReader(msg))
+
 	for scanner.Scan() {
 		l := scanner.Text()
 		l = strings.TrimRight(l, "\n")
@@ -98,12 +107,35 @@ func write(msg string, conn net.Conn) {
 			fmt.Println("Type:", typ)
 			switch typ {
 			case 0:
-				response = "+" + txt + "\r\n"
+				fmt.Println("OP:", op)
+				switch op {
+				case "SET":
+					fmt.Println("num:", num)
+					if num == 1 {
+						fmt.Println("Key:", txt)
+						key = txt
+					} else if num == 0 {
+						fmt.Println("Val:", txt)
+						m[key] = txt
+					}
+				case "GET":
+					key = txt
+					fmt.Println("Val:", m[key])
+					response = "+" + m[key] + "\r\n"
+
+				default:
+					response = "+" + txt + "\r\n"
+				}
 			case 1:
 				if num == 0 {
 					response = "+PONG\r\n"
 				}
 			case 2:
+			case 3:
+				op = "SET"
+				response = "+OK\r\n"
+			case 4:
+				op = "GET"
 			default:
 			}
 		}
@@ -129,6 +161,10 @@ func run(msg string) (string, int) {
 		return "", 1
 	case "echo", "ECHO":
 		return msg, 2
+	case "set", "SET":
+		return msg, 3
+	case "get", "GET":
+		return msg, 4
 	default:
 		return msg, 0
 	}
