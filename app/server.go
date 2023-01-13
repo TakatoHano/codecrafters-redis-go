@@ -10,16 +10,15 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
-
-type kvs map[string]string
 
 func main() {
 	// You can use print statements as follows for debugging, they'll be visible when running tests.
 	fmt.Println("Logs from your program will appear here!")
 	var mu sync.Mutex
 
-	m := kvs{}
+	m := Kvs{map[string]string{}, map[string]int64{}}
 
 	l, err := net.Listen("tcp", "0.0.0.0:6379")
 	if err != nil {
@@ -39,7 +38,6 @@ func main() {
 				return
 			}
 			fmt.Println("recieve msg:", msg)
-			// TODO: parse request message
 			mu.Lock()
 			write(msg, c, m)
 			mu.Unlock()
@@ -83,10 +81,11 @@ func read(conn net.Conn) (string, error) {
 	return msg.String(), nil
 }
 
-func write(msg string, conn net.Conn, m kvs) {
+func write(msg string, conn net.Conn, m Kvs) {
 
 	var num, len int
-	var response, op, key string
+	var response, op, key, val string
+	var px bool
 	scanner := bufio.NewScanner(strings.NewReader(msg))
 
 	for scanner.Scan() {
@@ -111,17 +110,37 @@ func write(msg string, conn net.Conn, m kvs) {
 				switch op {
 				case "SET":
 					fmt.Println("num:", num)
-					if num == 1 {
+					switch num {
+					case 3:
 						fmt.Println("Key:", txt)
 						key = txt
-					} else if num == 0 {
+					case 2:
 						fmt.Println("Val:", txt)
-						m[key] = txt
+						val = txt
+					case 1:
+						fmt.Println("Key:", txt)
+						key = txt
+					case 0:
+						if px {
+							fmt.Println("PX:", txt)
+							ms, _ := strconv.ParseInt(txt, 10, 64)
+							m.Set(key, val, ms)
+						} else {
+							fmt.Println("Val:", txt)
+							m.Set(key, txt, -1)
+						}
+						m.List()
+					default:
 					}
+
 				case "GET":
-					key = txt
-					fmt.Println("Val:", m[key])
-					response = "+" + m[key] + "\r\n"
+					value, ok := m.Get(txt)
+					fmt.Println("Val:", value)
+					if ok != nil {
+						response = "$-1\r\n"
+					} else {
+						response = "+" + value + "\r\n"
+					}
 
 				default:
 					response = "+" + txt + "\r\n"
@@ -136,10 +155,13 @@ func write(msg string, conn net.Conn, m kvs) {
 				response = "+OK\r\n"
 			case 4:
 				op = "GET"
+			case 5:
+				px = true
 			default:
 			}
 		}
 	}
+	fmt.Println("End. write:", response)
 	conn.Write([]byte(response))
 }
 
@@ -165,7 +187,44 @@ func run(msg string) (string, int) {
 		return msg, 3
 	case "get", "GET":
 		return msg, 4
+	case "px", "PX":
+		return msg, 5
 	default:
 		return msg, 0
 	}
+}
+
+type Kvs struct {
+	value     map[string]string
+	expire_at map[string]int64
+}
+
+func (k Kvs) Set(key string, val string, ms int64) {
+	fmt.Println("Set {Key:", key, " Value:", val, "px:", ms, "}")
+	k.value[key] = val
+	if ms < 0 {
+		k.expire_at[key] = -1
+	} else {
+		k.expire_at[key] = time.Now().UnixMilli() + ms
+	}
+	fmt.Println("Set OK. value:", k.value, "expire_at:", k.expire_at)
+}
+
+func (k Kvs) Get(key string) (string, error) {
+	val, ok := k.value[key]
+	if !ok {
+		return "", fmt.Errorf("not found")
+	}
+	ex := k.expire_at[key]
+	if ex > 0 && ex < time.Now().UnixMilli() {
+		delete(k.value, key)
+		delete(k.expire_at, key)
+		return "", fmt.Errorf("expired")
+
+	}
+	return val, nil
+}
+
+func (k Kvs) List() {
+	fmt.Println(k.value)
 }
